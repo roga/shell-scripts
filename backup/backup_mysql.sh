@@ -2,13 +2,14 @@
 # Copyright (c) 2019 roga <roga@roga.tw>
 # All rights reserved.
 #
-# mysql_backup.sh: Backup MySQL databases and keep backups for 60 days using ZIP.
+# mysql_backup.sh: Backup MySQL databases and keep backups for 60 days using TGZ.
 
 set -o pipefail
 
 # Global variables
 MYSQL="$(command -v mysql)"
 MYSQLDUMP="$(command -v mysqldump)"
+TAR="$(command -v tar)"
 
 # Function to check if required arguments are provided
 check_arguments() {
@@ -18,8 +19,8 @@ check_arguments() {
         exit 1
     fi
 
-    if [ -z "$MYSQL" ] || [ -z "$MYSQLDUMP" ]; then
-        echo "mysql and mysqldump must be installed and available in PATH." >&2
+    if [ -z "$MYSQL" ] || [ -z "$MYSQLDUMP" ] || [ -z "$TAR" ]; then
+        echo "mysql, mysqldump, and tar must be installed and available in PATH." >&2
         exit 1
     fi
 }
@@ -44,7 +45,7 @@ backup_database() {
     local backup_dir="$6"
     
     local sql_file="$backup_dir/${time}.${db}.sql"
-    local zip_file="$backup_dir/${time}.${db}.zip"
+    local archive_file="$backup_dir/${time}.${db}.tgz"
 
     echo "Backing up database: $db..."
 
@@ -57,10 +58,10 @@ backup_database() {
         return 1
     fi
 
-    # Compress with zip
-    if zip -j -q "$zip_file" "$sql_file"; then
+    # Compress with tar and gzip
+    if "$TAR" -czf "$archive_file" -C "$backup_dir" "${time}.${db}.sql"; then
         rm -f "$sql_file"
-        echo "Success: $zip_file created"
+        echo "Success: $archive_file created"
         return 0
     else
         echo "Failed to compress $sql_file" >&2
@@ -76,7 +77,7 @@ cleanup_old_backups() {
     echo "Cleaning up backups older than $days days..."
     find "$backup_dir" \
         -type f \
-        -name "*.zip" \
+        -name "*.tgz" \
         -mtime +"$days" \
         -exec rm -v -- {} \;
 }
