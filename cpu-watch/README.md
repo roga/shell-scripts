@@ -2,146 +2,15 @@
 
 A lightweight CPU incident watcher for Linux.
 
-`cpu-watch.sh` monitors total CPU usage with almost no disk writes during normal operation. When sustained high CPU usage is detected, it automatically starts collecting diagnostic information into an incident log for later investigation.
+`cpu-watch.sh` stays almost silent during normal operation. It samples CPU usage from `/proc/stat`, writes a small heartbeat/status file under `/run`, and only writes detailed diagnostic logs to disk when sustained high CPU usage is detected.
 
-It is designed for troubleshooting intermittent CPU spikes that are difficult to catch manually.
+The tool is intended for intermittent CPU problems that are difficult to catch manually.
 
-## How It Works
+## Quick Start
 
-During normal operation, the script periodically reads:
-
-```text
-/proc/stat
-```
-
-to calculate CPU utilization.
-
-No log file is written unless CPU usage exceeds the configured threshold for several consecutive checks.
-
-When an incident is detected, the script creates a log file such as:
+Install the script at:
 
 ```text
-/var/log/cpu-watch/incident-20260825-162315.log
-```
-
-and periodically records system information until CPU usage returns to normal.
-
-Each CPU incident is stored in a separate log file.
-
-## Information Collected
-
-During an incident, the script records:
-
-* Current date and time
-* CPU usage
-* System load and uptime
-* Memory and swap usage
-* `vmstat` statistics
-* Top CPU-consuming processes
-* Top memory-consuming processes
-* PHP / PHP-FPM processes
-* MySQL / MariaDB processes
-* Disk usage
-* Network connection summary
-
-This makes it easier to determine whether the CPU spike is caused by:
-
-* PHP or web requests
-* MySQL / MariaDB
-* Backup or maintenance jobs
-* Disk I/O
-* High system CPU usage
-* Long-running processes
-* Unexpected or abnormal processes
-
-## Default Settings
-
-The following values can be adjusted near the top of the script:
-
-```sh
-INTERVAL=5
-THRESHOLD=250
-TRIGGER_COUNT=3
-CAPTURE_INTERVAL=10
-LOGDIR=/var/log/cpu-watch
-```
-
-### `INTERVAL`
-
-CPU usage sampling interval, in seconds.
-
-Default:
-
-```text
-5 seconds
-```
-
-### `THRESHOLD`
-
-CPU usage required to trigger an incident.
-
-CPU usage is calculated as the combined utilization of all CPU cores.
-
-For example, on a 4-core server:
-
-```text
-100% = approximately 1 CPU core fully utilized
-200% = approximately 2 CPU cores fully utilized
-400% = approximately all 4 CPU cores fully utilized
-```
-
-The default threshold is:
-
-```text
-250%
-```
-
-### `TRIGGER_COUNT`
-
-Number of consecutive threshold violations required before an incident is created.
-
-Default:
-
-```text
-3
-```
-
-With:
-
-```text
-INTERVAL=5
-TRIGGER_COUNT=3
-```
-
-CPU usage must remain above the threshold for approximately 15 seconds before logging begins.
-
-This helps avoid logging short and harmless CPU bursts.
-
-### `CAPTURE_INTERVAL`
-
-How often diagnostic information is recorded during an active incident.
-
-Default:
-
-```text
-10 seconds
-```
-
-### `LOGDIR`
-
-Directory used for incident logs.
-
-Default:
-
-```text
-/var/log/cpu-watch
-```
-
-## Installation
-
-Copy the script to:
-
-```sh
 /usr/local/bin/cpu-watch.sh
 ```
 
@@ -151,215 +20,383 @@ Make it executable:
 sudo chmod +x /usr/local/bin/cpu-watch.sh
 ```
 
-## Running Manually
-
-Run it in the foreground:
+Before running it in the background, test it once in the foreground:
 
 ```sh
 sudo /usr/local/bin/cpu-watch.sh
 ```
 
-During normal CPU usage, the script produces no output.
-
-Press:
-
-```text
-Ctrl-C
-```
-
-to stop it.
-
-## Running in the Background
-
-For temporary monitoring:
+In another terminal, verify that the heartbeat is updating:
 
 ```sh
-sudo nohup /usr/local/bin/cpu-watch.sh >/dev/null 2>&1 &
-```
-
-Check whether it is running:
-
-```sh
-pgrep -af cpu-watch
+cat /run/cpu-watch.status
 ```
 
 Example:
 
 ```text
-12345 /bin/sh /usr/local/bin/cpu-watch.sh
+2026-08-26 10:10:58 CPU=3% STEAL=0.0% CORES=4
 ```
 
-## Stopping
+The timestamp should update approximately every 5 seconds.
 
-Find the process:
+Press `Ctrl-C` to stop the foreground test.
+
+## Start in the Background
+
+Recommended command:
+
+```sh
+sudo nohup /usr/local/bin/cpu-watch.sh \
+    >/tmp/cpu-watch.out \
+    2>/tmp/cpu-watch.err &
+```
+
+Check that it is running:
 
 ```sh
 pgrep -af cpu-watch
 ```
 
-Then stop it:
+You may see several related processes because `sudo`, the shell, and temporary subshells can all appear in the process list. They normally belong to the same process tree.
+
+To inspect the tree:
 
 ```sh
-sudo kill <PID>
+pstree -ap $(pgrep -o -f '/usr/local/bin/cpu-watch.sh')
 ```
 
-Alternatively:
+## Check Watcher Status
+
+The current watcher status is stored in:
+
+```text
+/run/cpu-watch.status
+```
+
+Check it with:
+
+```sh
+cat /run/cpu-watch.status
+```
+
+Example:
+
+```text
+2026-08-26 10:10:58 CPU=3% STEAL=0.0% CORES=4
+```
+
+This file is written under `/run`, which is normally backed by `tmpfs`, so the heartbeat does not continuously write to persistent disk storage.
+
+The status fields are:
+
+- `CPU` — combined CPU usage across all CPU cores
+- `STEAL` — CPU steal time observed by the guest OS
+- `CORES` — number of CPU cores detected by `nproc`
+
+For a 4-core server:
+
+```text
+100% = approximately 1 fully utilized core
+200% = approximately 2 fully utilized cores
+400% = approximately all 4 cores fully utilized
+```
+
+## Error Output
+
+Background startup messages and script errors are written to:
+
+```text
+/tmp/cpu-watch.err
+```
+
+Check it with:
+
+```sh
+cat /tmp/cpu-watch.err
+```
+
+A message such as:
+
+```text
+nohup: ignoring input
+```
+
+is normal and can be ignored.
+
+Standard output is written to:
+
+```text
+/tmp/cpu-watch.out
+```
+
+Under normal operation, this file should usually remain empty.
+
+## Incident Logs
+
+Detailed incident logs are stored in:
+
+```text
+/var/log/cpu-watch/
+```
+
+No incident log is created while CPU usage remains below the configured threshold.
+
+When sustained high CPU usage is detected, a new file is created, for example:
+
+```text
+/var/log/cpu-watch/incident-20260826-161530.log
+```
+
+List incidents:
+
+```sh
+sudo ls -lh /var/log/cpu-watch/
+```
+
+List them in chronological order:
+
+```sh
+sudo ls -ltr /var/log/cpu-watch/
+```
+
+Open an incident:
+
+```sh
+sudo less /var/log/cpu-watch/incident-20260826-161530.log
+```
+
+Open the newest matching incident:
+
+```sh
+sudo less /var/log/cpu-watch/incident-*.log
+```
+
+To quickly inspect captured CPU-heavy processes:
+
+```sh
+sudo grep -A 40 'TOP CPU PROCESSES' /var/log/cpu-watch/incident-*.log
+```
+
+To inspect `vmstat` data:
+
+```sh
+sudo grep -A 15 'VMSTAT' /var/log/cpu-watch/incident-*.log
+```
+
+## What Gets Captured
+
+During an active CPU incident, the script records:
+
+- Timestamp
+- CPU usage
+- CPU steal time
+- CPU core count
+- Uptime and load average
+- Memory and swap usage
+- `vmstat`
+- `mpstat` when available
+- Top CPU-consuming processes
+- Top memory-consuming processes
+- PHP / PHP-FPM processes
+- MySQL / MariaDB processes
+- Processes in running or uninterruptible I/O states
+- Filesystem usage
+- Inode usage
+- Network connection summary
+- TCP connections
+- Raw `/proc/stat` CPU counters
+
+This is intended to help distinguish between causes such as:
+
+- CPU-heavy PHP requests
+- MySQL / MariaDB activity
+- Backup or maintenance jobs
+- Compression or batch processing
+- Disk I/O bottlenecks
+- High kernel/system activity
+- CPU steal / virtualization contention
+- Unexpected long-running processes
+
+## Default Settings
+
+The main settings are defined near the top of `cpu-watch.sh`:
+
+```sh
+INTERVAL=5
+THRESHOLD=250
+TRIGGER_COUNT=3
+CAPTURE_INTERVAL=10
+
+LOGDIR=/var/log/cpu-watch
+STATUSFILE=/run/cpu-watch.status
+```
+
+### `INTERVAL`
+
+How often CPU utilization is sampled.
+
+Default:
+
+```text
+5 seconds
+```
+
+### `THRESHOLD`
+
+Combined CPU usage required to consider the system abnormal.
+
+Default:
+
+```text
+250%
+```
+
+On a 4-core system, `250%` means roughly 2.5 cores are fully utilized.
+
+### `TRIGGER_COUNT`
+
+Number of consecutive samples above the threshold before an incident starts.
+
+Default:
+
+```text
+3
+```
+
+With a 5-second interval, CPU usage must remain above the threshold for approximately 15 seconds before an incident log is created.
+
+### `CAPTURE_INTERVAL`
+
+How long the script waits between detailed captures during an active incident.
+
+Default:
+
+```text
+10 seconds
+```
+
+### `LOGDIR`
+
+Persistent incident log location:
+
+```text
+/var/log/cpu-watch
+```
+
+### `STATUSFILE`
+
+Current watcher heartbeat/status:
+
+```text
+/run/cpu-watch.status
+```
+
+## Stop the Watcher
+
+Stop all instances of the watcher:
 
 ```sh
 sudo pkill -f '/usr/local/bin/cpu-watch.sh'
 ```
 
-## Viewing Incident Logs
-
-List captured incidents:
+Confirm that it has stopped:
 
 ```sh
-ls -lh /var/log/cpu-watch/
+pgrep -af cpu-watch
 ```
 
-Example:
+No output means no matching watcher process remains.
 
-```text
-incident-20260825-162315.log
-incident-20260826-160842.log
-incident-20260827-161102.log
-```
+## Restart After Updating the Script
 
-View an incident:
+After modifying `cpu-watch.sh`:
 
 ```sh
-less /var/log/cpu-watch/incident-20260825-162315.log
+sudo pkill -f '/usr/local/bin/cpu-watch.sh'
 ```
 
-To quickly find the top CPU process entries:
+Then start the new version:
 
 ```sh
-grep -A 40 'TOP CPU PROCESSES' /var/log/cpu-watch/incident-*.log
+sudo nohup /usr/local/bin/cpu-watch.sh \
+    >/tmp/cpu-watch.out \
+    2>/tmp/cpu-watch.err &
 ```
 
-## Interpreting `vmstat`
-
-The incident log includes output from:
+Verify the heartbeat:
 
 ```sh
-vmstat 1 2
+cat /run/cpu-watch.status
 ```
 
-Important CPU fields include:
+Wait at least 5 seconds and check again:
 
-```text
-us
-sy
-wa
-id
+```sh
+sleep 6
+cat /run/cpu-watch.status
 ```
 
-### `us`
+The timestamp should change.
 
-CPU time spent executing user-space applications.
+Finally, check for startup errors:
 
-High `us` may indicate CPU-heavy applications such as PHP, database queries, compression, or other computation.
-
-### `sy`
-
-CPU time spent inside the Linux kernel.
-
-High `sy` can indicate heavy system calls, networking, filesystem activity, or kernel-level work.
-
-### `wa`
-
-CPU time spent waiting for I/O.
-
-High `wa` usually indicates a disk or storage bottleneck rather than pure CPU computation.
-
-### `id`
-
-Idle CPU percentage.
-
-A low `id` value means the CPUs are heavily utilized.
-
-For example:
-
-```text
-us sy wa id
-85 10  1  4
+```sh
+cat /tmp/cpu-watch.err
 ```
-
-indicates that the CPUs are primarily busy doing computation.
-
-While:
-
-```text
-us sy wa id
-10  5 80  5
-```
-
-indicates that the system is primarily waiting for disk I/O.
-
-## Why Incident-Based Logging?
-
-A traditional monitoring script might write process information every few seconds continuously:
-
-```text
-24 hours × 60 minutes × 60 seconds
-```
-
-This creates unnecessary disk writes and large log files.
-
-`cpu-watch` instead stays almost completely passive during normal operation and only starts detailed logging after detecting sustained abnormal CPU usage.
-
-This makes it suitable for running for days or weeks while waiting for an intermittent problem to occur.
 
 ## Typical Investigation Workflow
 
-Start the watcher:
+When a CPU alert occurs:
+
+1. Check what the watcher currently sees:
 
 ```sh
-sudo nohup /usr/local/bin/cpu-watch.sh >/dev/null 2>&1 &
+cat /run/cpu-watch.status
 ```
 
-Wait for the CPU problem to occur.
-
-Then inspect:
+2. Check whether an incident log was created:
 
 ```sh
-ls -ltr /var/log/cpu-watch/
+sudo ls -ltr /var/log/cpu-watch/
 ```
 
-Open the newest incident:
+3. Inspect the newest incident log:
 
 ```sh
-less /var/log/cpu-watch/incident-*.log
+sudo less /var/log/cpu-watch/incident-*.log
 ```
 
-Look first at:
+4. Focus first on:
 
 ```text
 TOP CPU PROCESSES
 VMSTAT
+MPSTAT
 MYSQL / MARIADB
-PHP
+PHP / PHP-FPM
+PROCESS STATES
 ```
 
-These sections usually provide enough information to identify the process responsible for the CPU spike.
-
-## Notes
-
-The script is intended primarily as a troubleshooting tool rather than a full monitoring system.
-
-For long-term system monitoring, tools such as:
+The important distinction is:
 
 ```text
-sysstat
-pidstat
-sar
-Prometheus
-Grafana
+/run/cpu-watch.status
 ```
 
-may provide more complete historical metrics.
+is the lightweight live heartbeat, while:
 
-`cpu-watch` is useful when the goal is simpler:
+```text
+/var/log/cpu-watch/incident-*.log
+```
+
+contains the persistent forensic evidence captured only during an abnormal CPU event.
+
+## Design Goal
+
+`cpu-watch` is not intended to replace a full monitoring platform.
+
+Its purpose is simple:
 
 > Wait quietly until something abnormal happens, then collect enough evidence to identify the culprit.
 
