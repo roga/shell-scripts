@@ -1,6 +1,6 @@
 #!/bin/bash
 # Copyright (c) 2019 roga <roga@roga.tw>
-# All rights reserved.
+# Licensed under the MIT License.
 #
 # backup_www.sh: Backup each source subdirectory and keep backups for 60 days using TGZ.
 
